@@ -425,6 +425,43 @@
             document.getElementById('imageInput').click();
         });
 
+        // NEW: Helper function to shrink huge iPhone screenshots so Vercel doesn't block them
+        function compressImage(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = event => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        
+                        // Scale down to max 1000px
+                        const MAX_WIDTH = 1000;
+                        const MAX_HEIGHT = 1000;
+                        if (width > height) {
+                            if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
+                        } else {
+                            if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        
+                        // Export as highly compressed JPEG
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+                        resolve(dataUrl.split(',')[1]); // Return only the base64 part
+                    };
+                    img.onerror = error => reject(error);
+                };
+                reader.onerror = error => reject(error);
+            });
+        }
+
         document.getElementById('imageInput').addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -435,92 +472,58 @@
             btn.style.opacity = '0.7';
 
             try {
-                const reader = new FileReader();
-                reader.readAsDataURL(file);
+                // Compress the image before sending
+                const compressedBase64 = await compressImage(file);
                 
-                await new Promise((resolve, reject) => {
-                    reader.onload = async () => {
-                        try {
-                            const base64Data = reader.result.split(',')[1];
-                            const mimeType = file.type;
-
-                            // Call our secure Vercel serverless backend instead of Gemini directly
-                            const response = await fetch('/api/scan', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ 
-                                    imageBase64: base64Data, 
-                                    mimeType: mimeType 
-                                })
-                            });
-
-                            if (!response.ok) {
-                                throw new Error("Backend scanning failed");
-                            }
-
-                            const data = await response.json();
-                                
-                            if(data.grid && data.target !== undefined) {
-                                // Update the internal state with the newly extracted puzzle
-                                gridData = data.grid;
-                                ROWS = gridData.length;
-                                COLS = gridData[0].length;
-                                TARGET_GOAL = data.target;
-                                    
-                                // Update the UI
-                                document.getElementById('targetGoalDisplay').innerText = TARGET_GOAL;
-                                document.getElementById('clearBtn').click();
-                                    
-                                // Wait a tiny moment for layout reflow before redrawing grid
-                                setTimeout(() => resizeCanvas(), 10);
-                            } else {
-                                throw new Error("Invalid format from AI");
-                            }
-                            resolve();
-                        } catch (err) {
-                            console.warn("API Error (Using Mock Fallback for Demo):", err);
-                            
-                            // FALLBACK: Since the backend isn't deployed in the preview, 
-                            // we inject a mock 5x5 grid so you can see the dynamic UI in action!
-                            gridData = [
-                                [5, '+', 2, '*', 6],
-                                ['*', 3, '-', 1, '-'],
-                                [2, '*', 8, '/', 4],
-                                ['-', 4, '+', 2, '*'],
-                                [3, '+', 7, '-', 1]
-                            ];
-                            ROWS = gridData.length;
-                            COLS = gridData[0].length;
-                            TARGET_GOAL = 5; // Path: 5 + 2 - 8 + 7 - 1 = 5
-                                
-                            document.getElementById('targetGoalDisplay').innerText = TARGET_GOAL;
-                            document.getElementById('clearBtn').click();
-                            setTimeout(() => resizeCanvas(), 10);
-
-                            // Show success momentarily on the button (Mocked)
-                            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Demo Loaded';
-                            btn.style.backgroundColor = '#1fb154';
-                            btn.style.borderColor = '#16a34a';
-                            setTimeout(() => {
-                                btn.innerHTML = originalHtml;
-                                btn.style.backgroundColor = '#2563eb';
-                                btn.style.borderColor = '#1d4ed8';
-                            }, 3000);
-                            
-                            resolve();
-                        }
-                    };
-                    reader.onerror = error => reject(error);
+                // Send to Vercel Serverless Function
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        imageBase64: compressedBase64, 
+                        mimeType: 'image/jpeg' 
+                    })
                 });
 
+                // --- NEW ROBUST ERROR CATCHER ---
+                if (!response.ok) {
+                    let errorMessage = `HTTP ${response.status} Error`;
+                    try {
+                        const errData = await response.json();
+                        errorMessage = errData.error || errorMessage;
+                    } catch (parseErr) {
+                        errorMessage += " - The server crashed. Check Vercel logs.";
+                    }
+                    throw new Error(errorMessage);
+                }
+                // --------------------------------
+
+                const data = await response.json();
+                    
+                if(data.grid && data.target !== undefined) {
+                    gridData = data.grid;
+                    ROWS = gridData.length;
+                    COLS = gridData[0].length;
+                    TARGET_GOAL = data.target;
+                        
+                    document.getElementById('targetGoalDisplay').innerText = TARGET_GOAL;
+                    document.getElementById('clearBtn').click();
+                    setTimeout(() => resizeCanvas(), 10);
+                } else {
+                    throw new Error("Invalid format from AI");
+                }
             } catch (error) {
-                console.error("Upload error:", error);
+                console.error("API Error:", error);
+                
+                // REMOVED THE DEMO FALLBACK - Now it will tell us EXACTLY what is wrong
+                alert("Error scanning image: " + error.message);
+                
             } finally {
                 if (btn.innerHTML.includes('Scanning')) {
                     btn.innerHTML = originalHtml;
                     btn.style.opacity = '1';
                 }
-                e.target.value = ''; // Reset so you can upload the same image again if needed
+                e.target.value = '';
             }
         });
 
