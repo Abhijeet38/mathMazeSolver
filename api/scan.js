@@ -1,5 +1,6 @@
 export default async function handler(req, res) {
     // 1. Security Check: Only allow POST requests
+module.exports = async function handler(req, res) {
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
