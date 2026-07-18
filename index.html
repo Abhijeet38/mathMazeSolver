@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Math Maze Solver</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #121315; /* Dark background matching screenshot */
+            color: white;
+            touch-action: manipulation; /* Prevent zoom on double tap */
+        }
+        
+        #canvas-container {
+            width: 100%;
+            max-width: 420px; /* Optimal size for mobile/tablet */
+            aspect-ratio: 1 / 1;
+            position: relative;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+
+        /* Custom Button Styling */
+        .action-btn {
+            background-color: #2a2b2e;
+            color: white;
+            border: 1px solid #3f4044;
+            transition: all 0.2s ease;
+        }
+        
+        .action-btn:active {
+            transform: scale(0.95);
+            background-color: #3f4044;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center min-h-screen pt-8 pb-12 select-none overflow-x-hidden">
+
+    <!-- Header: Target Goal -->
+    <div class="text-center mb-4">
+        <div class="flex items-center justify-center gap-1.5 text-gray-400 text-[10px] font-bold tracking-[0.2em] uppercase mb-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+            Target Goal
+        </div>
+        <h1 id="targetGoalDisplay" class="text-6xl font-black tracking-tight" style="color: #1fb154;">100</h1>
+    </div>
+
+    <!-- Game Board -->
+    <div class="w-full px-4 flex justify-center">
+        <div id="canvas-container">
+            <canvas id="gameCanvas"></canvas>
+        </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="flex items-center justify-center gap-4 mt-10 flex-wrap">
+        <input type="file" id="imageInput" accept="image/*" class="hidden">
+        <button id="uploadBtn" class="action-btn px-6 py-3 rounded-2xl text-xs font-bold tracking-widest uppercase flex items-center gap-2 shadow-lg" style="background-color: #2563eb; border-color: #1d4ed8;">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path>
+            </svg>
+            Scan Image
+        </button>
+        <button id="solveBtn" class="action-btn px-6 py-3 rounded-2xl text-xs font-bold tracking-widest uppercase flex items-center gap-2 shadow-lg">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+            </svg>
+            Solve Path
+        </button>
+        <button id="clearBtn" class="action-btn px-6 py-3 rounded-2xl text-xs font-bold tracking-widest uppercase flex items-center gap-2 shadow-lg">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+            </svg>
+            Clear
+        </button>
+    </div>
+
+    <script>
+        // Data and Constants
+        let gridData = [
+            [2, '*', 6, '*', 8, '-'],
+            ['*', 8, '*', 3, '-', 7],
+            [9, '+', 8, '*', 7, '/'],
+            ['-', 6, '/', 4, '*', 3],
+            [3, '-', 5, '*', 1, '-'],
+            ['/', 3, '-', 1, '+', 4]
+        ];
+        
+        let ROWS = gridData.length;
+        let COLS = gridData[0].length;
+        let TARGET_GOAL = 100;
+        
+        // Canvas State
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('canvas-container');
+        
+        let finalPath = [];
+        let animationProgress = 0;
+        let animationId = null;
+        let isDrawingPath = false;
+
+        // Colors extracted from screenshot
+        const COLORS = {
+            bg: '#121315',
+            numberCell: '#f4e3b5',  // Beige
+            operatorCell: '#1fb154', // Green
+            textDark: '#121315',
+            pathStroke: '#ecd086', // Golden Beige
+            tooltipBorder: '#f4e3b5'
+        };
+
+        // Resize Canvas to fit container with high DPI support
+        function resizeCanvas() {
+            const rect = container.getBoundingClientRect();
+            // Prevent execution if container has no size yet
+            if (rect.width === 0) return; 
+
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            
+            // Normalize coordinate system to use css pixels
+            ctx.scale(dpr, dpr);
+            
+            draw();
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+
+        // Math helper
+        function calculate(a, operator, b) {
+            switch (operator) {
+                case '+': return a + b;
+                case '-': return a - b;
+                case '*': return a * b;
+                case '/': return a / b;
+                default: return null;
+            }
+        }
+
+        // DFS Solver
+        function findMazePath() {
+            const visited = Array(ROWS).fill(false).map(() => Array(COLS).fill(false));
+            let solvedPath = null;
+
+            const dfs = (r, c, currentTotal, currentOperator, path, expectingNumber) => {
+                // Out of bounds or already visited
+                if (r < 0 || c < 0 || r >= ROWS || c >= COLS || visited[r][c]) return false;
+
+                const cellValue = gridData[r][c];
+                const isNumberCell = typeof cellValue === 'number';
+
+                // Check alternating pattern (Number -> Operator -> Number)
+                if (expectingNumber !== isNumberCell) return false;
+
+                let nextTotal = currentTotal;
+                let nextOperator = currentOperator;
+
+                if (isNumberCell) {
+                    if (currentOperator !== null) {
+                        nextTotal = calculate(currentTotal, currentOperator, cellValue);
+                        // Invalid math check (e.g., dividing by zero or resulting in decimals)
+                        if (nextTotal === null || !Number.isFinite(nextTotal) || !Number.isInteger(nextTotal)) return false;
+                    } else {
+                        // First cell initialization
+                        nextTotal = cellValue;
+                    }
+                    nextOperator = null; // Reset operator after use
+                } else {
+                    nextOperator = cellValue; // Store operator for next number
+                }
+
+                // Add to current path
+                visited[r][c] = true;
+                path.push([r, c]);
+
+                // Base Case: Reached bottom right
+                if (r === ROWS - 1 && c === COLS - 1) {
+                    if (nextTotal === TARGET_GOAL) {
+                        solvedPath = [...path];
+                        return true;
+                    }
+                } else {
+                    // Explore 4 neighbors
+                    const directions = [[0, 1], [1, 0], [0, -1], [-1, 0]];
+                    for (let [dr, dc] of directions) {
+                        if (dfs(r + dr, c + dc, nextTotal, nextOperator, path, !expectingNumber)) {
+                            return true;
+                        }
+                    }
+                }
+
+                // Backtrack
+                path.pop();
+                visited[r][c] = false;
+                return false;
+            };
+
+            // Start search at (0,0) expecting a number, total 0
+            dfs(0, 0, 0, null, [], true);
+            return solvedPath;
+        }
+
+        // Main Drawing Function
+        function draw() {
+            // Get CSS dimensions from rect
+            const rect = container.getBoundingClientRect();
+            if (rect.width === 0) return;
+
+            const w = rect.width;
+            const h = rect.height;
+            
+            ctx.clearRect(0, 0, w, h);
+
+            // Calculate grid spacing
+            const padding = 20; // Internal padding
+            const usableWidth = w - (padding * 2);
+            const usableHeight = h - (padding * 2);
+            const cellW = usableWidth / COLS;
+            const cellH = usableHeight / ROWS;
+            
+            // Cell radius with a slight gap between cells
+            const maxCellSize = Math.min(cellW, cellH);
+            let radius = (maxCellSize / 2) * 0.85; 
+            radius = Math.max(0, radius); // Ensure radius is never negative
+
+            // Offset to center the grid perfectly
+            const offsetX = padding + (usableWidth - (COLS * cellW)) / 2;
+            const offsetY = padding + (usableHeight - (ROWS * cellH)) / 2;
+
+            // 1. Draw the Solved Path (Behind cells)
+            if (finalPath.length > 0) {
+                ctx.beginPath();
+                ctx.strokeStyle = COLORS.pathStroke;
+                ctx.lineWidth = radius * 1.6; // Thick path
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+
+                const pointsToDraw = Math.min(Math.floor(animationProgress), finalPath.length - 1);
+
+                for (let i = 0; i <= pointsToDraw; i++) {
+                    const [r, c] = finalPath[i];
+                    const cx = offsetX + c * cellW + cellW / 2;
+                    const cy = offsetY + r * cellH + cellH / 2;
+                    
+                    if (i === 0) ctx.moveTo(cx, cy);
+                    else ctx.lineTo(cx, cy);
+                }
+
+                // Smooth interpolation for the leading edge of the path
+                if (pointsToDraw < finalPath.length - 1 && isDrawingPath) {
+                    const fraction = animationProgress - pointsToDraw;
+                    const [r1, c1] = finalPath[pointsToDraw];
+                    const [r2, c2] = finalPath[pointsToDraw + 1];
+                    
+                    const startX = offsetX + c1 * cellW + cellW / 2;
+                    const startY = offsetY + r1 * cellH + cellH / 2;
+                    const endX = offsetX + c2 * cellW + cellW / 2;
+                    const endY = offsetY + r2 * cellH + cellH / 2;
+
+                    const currentX = startX + (endX - startX) * fraction;
+                    const currentY = startY + (endY - startY) * fraction;
+                    ctx.lineTo(currentX, currentY);
+                }
+
+                ctx.stroke();
+            }
+
+            // 2. Draw the Grid Cells
+            ctx.font = `bold ${radius * 1.1}px Inter, sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            for (let r = 0; r < ROWS; r++) {
+                for (let c = 0; c < COLS; c++) {
+                    const val = gridData[r][c];
+                    const isNum = typeof val === 'number';
+                    
+                    const cx = offsetX + c * cellW + cellW / 2;
+                    const cy = offsetY + r * cellH + cellH / 2;
+
+                    // Draw Circle
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                    ctx.fillStyle = isNum ? COLORS.numberCell : COLORS.operatorCell;
+                    ctx.fill();
+
+                    // Draw Text
+                    ctx.fillStyle = COLORS.textDark;
+                    // Nudge text down slightly for visual centering
+                    ctx.fillText(val, cx, cy + (radius * 0.1)); 
+                }
+            }
+
+            // 3. Draw START and END Tooltips
+            const startCx = offsetX + 0 * cellW + cellW / 2;
+            const startCy = offsetY + 0 * cellH + cellH / 2;
+            drawTooltip(startCx, startCy, "START", radius, true);
+
+            const endCx = offsetX + (COLS - 1) * cellW + cellW / 2;
+            const endCy = offsetY + (ROWS - 1) * cellH + cellH / 2;
+            drawTooltip(endCx, endCy, "END", radius, false);
+        }
+
+        function drawTooltip(x, y, text, cellRadius, isStart) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            const w = 56;
+            const h = 26;
+            // Position above for START, below for END
+            const yOffset = isStart ? -cellRadius - h - 10 : cellRadius + 10;
+            
+            // Draw Pointer Triangle
+            ctx.beginPath();
+            if (isStart) {
+                ctx.moveTo(-6, yOffset + h - 1);
+                ctx.lineTo(6, yOffset + h - 1);
+                ctx.lineTo(0, yOffset + h + 6);
+            } else {
+                ctx.moveTo(-6, yOffset + 1);
+                ctx.lineTo(6, yOffset + 1);
+                ctx.lineTo(0, yOffset - 6);
+            }
+            ctx.fillStyle = COLORS.bg;
+            ctx.fill();
+            
+            // Draw Rounded Box
+            ctx.beginPath();
+            ctx.roundRect(-w/2, yOffset, w, h, 6);
+            ctx.fillStyle = COLORS.bg;
+            ctx.fill();
+            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = COLORS.tooltipBorder;
+            ctx.stroke();
+
+            // Re-draw pointer outline slightly so it blends perfectly
+            ctx.beginPath();
+            if (isStart) {
+                ctx.moveTo(-6, yOffset + h);
+                ctx.lineTo(0, yOffset + h + 6);
+                ctx.lineTo(6, yOffset + h);
+            } else {
+                ctx.moveTo(-6, yOffset);
+                ctx.lineTo(0, yOffset - 6);
+                ctx.lineTo(6, yOffset);
+            }
+            ctx.stroke();
+
+            // Draw Text
+            ctx.fillStyle = COLORS.tooltipBorder; // Match border color
+            ctx.font = 'bold 11px Inter, sans-serif';
+            ctx.fillText(text, 0, yOffset + h/2 + 1);
+            
+            ctx.restore();
+        }
+
+        function animatePath() {
+            if (!isDrawingPath) return;
+
+            // Speed of drawing (higher = faster)
+            animationProgress += 0.4; 
+
+            if (animationProgress >= finalPath.length) {
+                animationProgress = finalPath.length;
+                isDrawingPath = false;
+            }
+
+            draw();
+
+            if (isDrawingPath) {
+                animationId = requestAnimationFrame(animatePath);
+            }
+        }
+
+        document.getElementById('solveBtn').addEventListener('click', () => {
+            const btn = document.getElementById('solveBtn');
+            btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Solving...';
+            
+            // Tiny timeout to let UI update before heavy DFS runs
+            setTimeout(() => {
+                const path = findMazePath();
+                btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Solved';
+                btn.style.color = '#1fb154';
+                
+                if (path) {
+                    finalPath = path;
+                    animationProgress = 0;
+                    isDrawingPath = true;
+                    if (animationId) cancelAnimationFrame(animationId);
+                    animatePath();
+                } else {
+                    btn.innerHTML = 'No Path Found';
+                    btn.style.color = '#ef4444'; // Red error
+                }
+            }, 50);
+        });
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            finalPath = [];
+            isDrawingPath = false;
+            if (animationId) cancelAnimationFrame(animationId);
+            
+            const btn = document.getElementById('solveBtn');
+            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> Solve Path';
+            btn.style.color = 'white';
+            draw();
+        });
+
+        document.getElementById('uploadBtn').addEventListener('click', () => {
+            document.getElementById('imageInput').click();
+        });
+
+        document.getElementById('imageInput').addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const btn = document.getElementById('uploadBtn');
+            const originalHtml = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Scanning...';
+            btn.style.opacity = '0.7';
+
+            try {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                
+                await new Promise((resolve, reject) => {
+                    reader.onload = async () => {
+                        try {
+                            const base64Data = reader.result.split(',')[1];
+                            const mimeType = file.type;
+
+                            // Call our secure Vercel serverless backend instead of Gemini directly
+                            const response = await fetch('/api/scan', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    imageBase64: base64Data, 
+                                    mimeType: mimeType 
+                                })
+                            });
+
+                            if (!response.ok) {
+                                throw new Error("Backend scanning failed");
+                            }
+
+                            const data = await response.json();
+                                
+                            if(data.grid && data.target !== undefined) {
+                                // Update the internal state with the newly extracted puzzle
+                                gridData = data.grid;
+                                ROWS = gridData.length;
+                                COLS = gridData[0].length;
+                                TARGET_GOAL = data.target;
+                                    
+                                // Update the UI
+                                document.getElementById('targetGoalDisplay').innerText = TARGET_GOAL;
+                                document.getElementById('clearBtn').click();
+                                    
+                                // Wait a tiny moment for layout reflow before redrawing grid
+                                setTimeout(() => resizeCanvas(), 10);
+                            } else {
+                                throw new Error("Invalid format from AI");
+                            }
+                            resolve();
+                        } catch (err) {
+                            console.warn("API Error (Using Mock Fallback for Demo):", err);
+                            
+                            // FALLBACK: Since the backend isn't deployed in the preview, 
+                            // we inject a mock 5x5 grid so you can see the dynamic UI in action!
+                            gridData = [
+                                [5, '+', 2, '*', 6],
+                                ['*', 3, '-', 1, '-'],
+                                [2, '*', 8, '/', 4],
+                                ['-', 4, '+', 2, '*'],
+                                [3, '+', 7, '-', 1]
+                            ];
+                            ROWS = gridData.length;
+                            COLS = gridData[0].length;
+                            TARGET_GOAL = 5; // Path: 5 + 2 - 8 + 7 - 1 = 5
+                                
+                            document.getElementById('targetGoalDisplay').innerText = TARGET_GOAL;
+                            document.getElementById('clearBtn').click();
+                            setTimeout(() => resizeCanvas(), 10);
+
+                            // Show success momentarily on the button (Mocked)
+                            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg> Demo Loaded';
+                            btn.style.backgroundColor = '#1fb154';
+                            btn.style.borderColor = '#16a34a';
+                            setTimeout(() => {
+                                btn.innerHTML = originalHtml;
+                                btn.style.backgroundColor = '#2563eb';
+                                btn.style.borderColor = '#1d4ed8';
+                            }, 3000);
+                            
+                            resolve();
+                        }
+                    };
+                    reader.onerror = error => reject(error);
+                });
+
+            } catch (error) {
+                console.error("Upload error:", error);
+            } finally {
+                if (btn.innerHTML.includes('Scanning')) {
+                    btn.innerHTML = originalHtml;
+                    btn.style.opacity = '1';
+                }
+                e.target.value = ''; // Reset so you can upload the same image again if needed
+            }
+        });
+
+        // Initialize on load
+        window.onload = () => {
+            // Wait for Google Fonts to be fully ready before drawing on canvas
+            document.fonts.ready.then(() => {
+                setTimeout(() => {
+                    resizeCanvas();
+                }, 50);
+            });
+        };
+    </script>
+</body>
+</html>
