@@ -45,7 +45,11 @@ module.exports = async function handler(req, res) {
         
         // Success path
         if (result.candidates && result.candidates.length > 0) {
-            const jsonString = result.candidates[0].content.parts[0].text;
+            let jsonString = result.candidates[0].content.parts[0].text;
+            
+            // Fix: Strip out markdown formatting if Gemini includes it
+            jsonString = jsonString.replace(/```json/g, '').replace(/```/g, '').trim();
+            
             const data = JSON.parse(jsonString);
             return res.status(200).json(data);
         } else {
